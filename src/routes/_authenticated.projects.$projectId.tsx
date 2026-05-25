@@ -1,5 +1,6 @@
 import { createFileRoute, Link, notFound } from "@tanstack/react-router";
-import { useState } from "react";
+import { useServerFn } from "@tanstack/react-start";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft,
   Upload,
@@ -19,36 +20,36 @@ import {
   GitCommit,
   Loader2,
   XCircle,
+  Link2,
 } from "lucide-react";
+import { useState } from "react";
 import { AppShell } from "@/components/app-shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
-import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  projectById,
-  sources as allSources,
-  memory as allMemory,
-  actions as allActions,
-  artifacts as allArtifacts,
-  ARTIFACT_TYPES,
-  type SourceStatus,
-} from "@/lib/mock-data";
+import { getProject } from "@/lib/projects.functions";
+import { toggleAction } from "@/lib/actions.functions";
 import { cn } from "@/lib/utils";
 
-export const Route = createFileRoute("/projects/$projectId")({
+export const Route = createFileRoute("/_authenticated/projects/$projectId")({
   component: ProjectWorkspace,
-  loader: ({ params }) => {
-    const p = projectById(params.projectId);
-    if (!p) throw notFound();
-    return { project: p };
-  },
 });
+
+const ARTIFACT_TYPES = [
+  { key: "exec_brief", label: "Executive Brief", desc: "One-page narrative for leadership: status, risks, asks." },
+  { key: "meeting_summary", label: "Meeting Summary", desc: "Decisions, actions, open questions from a meeting." },
+  { key: "prd", label: "Product Requirements Doc", desc: "PRD synthesized from sources and decisions." },
+  { key: "sop", label: "Standard Operating Procedure", desc: "Step-by-step SOP derived from project memory." },
+  { key: "project_plan", label: "Project Plan", desc: "Workstreams, milestones, owners, dependencies." },
+  { key: "followup_email", label: "Follow-up Email", desc: "Drafted recap email to a stakeholder." },
+  { key: "meeting_prep", label: "Meeting Prep", desc: "Briefing pack with context, talking points, decisions needed." },
+];
+
+type SourceStatus = "uploaded" | "processing" | "processed" | "failed";
 
 const statusBadge: Record<SourceStatus, { label: string; cls: string; icon: any }> = {
   uploaded: { label: "Uploaded", cls: "text-slate-700 bg-slate-50 border-slate-200", icon: Upload },
@@ -63,14 +64,39 @@ const kindIcon: Record<string, any> = {
   audio: Mic,
   video: Video,
   note: StickyNote,
+  url: Link2,
 };
 
 function ProjectWorkspace() {
-  const { project } = Route.useLoaderData();
-  const sources = allSources.filter((s) => s.projectId === project.id);
-  const memory = allMemory.filter((m) => m.projectId === project.id);
-  const actions = allActions.filter((a) => a.projectId === project.id);
-  const artifacts = allArtifacts.filter((a) => a.projectId === project.id);
+  const { projectId } = Route.useParams();
+  const fetchProject = useServerFn(getProject);
+  const q = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: () => fetchProject({ data: { projectId } }),
+  });
+
+  if (q.isLoading) {
+    return (
+      <AppShell>
+        <div className="p-10 text-center text-sm text-muted-foreground">Loading project…</div>
+      </AppShell>
+    );
+  }
+
+  if (q.isError || !q.data) {
+    return (
+      <AppShell>
+        <div className="p-10 text-center">
+          <div className="text-sm font-medium">Project not found</div>
+          <Link to="/" className="mt-2 inline-block text-xs text-muted-foreground underline">
+            Back to dashboard
+          </Link>
+        </div>
+      </AppShell>
+    );
+  }
+
+  const { project, sources, memory, actions, artifacts } = q.data;
 
   return (
     <AppShell>
@@ -85,13 +111,13 @@ function ProjectWorkspace() {
           <div className="min-w-0">
             <h1 className="text-xl font-semibold tracking-tight">{project.name}</h1>
             <div className="mt-0.5 text-xs text-muted-foreground">
-              {project.client} · Owner {project.owner} · Updated{" "}
-              {new Date(project.updatedAt).toLocaleString()}
+              {project.client ?? "—"} · Owner {project.owner_name ?? "Unassigned"} · Updated{" "}
+              {new Date(project.updated_at).toLocaleString()}
             </div>
           </div>
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="capitalize">
-              {project.health.replace("_", " ")}
+              {String(project.health).replace("_", " ")}
             </Badge>
             <Button size="sm" variant="outline">
               <Upload className="h-3.5 w-3.5" /> Add source
@@ -113,8 +139,8 @@ function ProjectWorkspace() {
               ["console", "AI Console"],
             ].map(([v, l]) => (
               <TabsTrigger
-                key={v}
-                value={v}
+                key={v as string}
+                value={v as string}
                 className="rounded-none border-b-2 border-transparent bg-transparent px-3 text-xs font-medium text-muted-foreground shadow-none data-[state=active]:border-foreground data-[state=active]:bg-transparent data-[state=active]:text-foreground data-[state=active]:shadow-none"
               >
                 {l}
@@ -122,26 +148,24 @@ function ProjectWorkspace() {
             ))}
           </TabsList>
 
-          <div className="p-0 lg:p-0">
-            <TabsContent value="overview" className="mt-0 p-4 lg:p-6">
-              <OverviewTab project={project} memory={memory} actions={actions} />
-            </TabsContent>
-            <TabsContent value="sources" className="mt-0 p-4 lg:p-6">
-              <SourcesTab sources={sources} />
-            </TabsContent>
-            <TabsContent value="memory" className="mt-0 p-4 lg:p-6">
-              <MemoryTab memory={memory} />
-            </TabsContent>
-            <TabsContent value="actions" className="mt-0 p-4 lg:p-6">
-              <ActionsTab actions={actions} />
-            </TabsContent>
-            <TabsContent value="artifacts" className="mt-0 p-4 lg:p-6">
-              <ArtifactsTab artifacts={artifacts} />
-            </TabsContent>
-            <TabsContent value="console" className="mt-0">
-              <ConsoleTab projectName={project.name} />
-            </TabsContent>
-          </div>
+          <TabsContent value="overview" className="mt-0 p-4 lg:p-6">
+            <OverviewTab project={project} memory={memory} actions={actions} />
+          </TabsContent>
+          <TabsContent value="sources" className="mt-0 p-4 lg:p-6">
+            <SourcesTab sources={sources} />
+          </TabsContent>
+          <TabsContent value="memory" className="mt-0 p-4 lg:p-6">
+            <MemoryTab memory={memory} />
+          </TabsContent>
+          <TabsContent value="actions" className="mt-0 p-4 lg:p-6">
+            <ActionsTab actions={actions} projectId={projectId} />
+          </TabsContent>
+          <TabsContent value="artifacts" className="mt-0 p-4 lg:p-6">
+            <ArtifactsTab artifacts={artifacts} />
+          </TabsContent>
+          <TabsContent value="console" className="mt-0">
+            <ConsoleTab projectName={project.name} />
+          </TabsContent>
         </Tabs>
       </div>
     </AppShell>
@@ -158,11 +182,7 @@ function OverviewTab({ project, memory, actions }: any) {
           Executive summary
         </div>
         <p className="mt-2 text-sm leading-relaxed text-foreground/90">
-          {project.summary} Steering committee approved deferring APAC cutover to Q4 due to
-          integration gaps. Two high-priority risks remain open: master data quality below
-          threshold and constrained sponsor capacity through June. The team is tracking 9 open
-          actions with 3 due this week. Recommended next move: confirm parallel run duration with
-          CFO and validate fallback rollback path before Friday's steering review.
+          {project.summary}
         </p>
         <div className="mt-4 grid grid-cols-3 gap-3 border-t pt-4">
           <div>
@@ -172,7 +192,9 @@ function OverviewTab({ project, memory, actions }: any) {
           </div>
           <div>
             <div className="text-[11px] uppercase text-muted-foreground">Open actions</div>
-            <div className="mt-1 text-lg font-semibold">{actions.length}</div>
+            <div className="mt-1 text-lg font-semibold">
+              {actions.filter((a: any) => a.status !== "done").length}
+            </div>
           </div>
           <div>
             <div className="text-[11px] uppercase text-muted-foreground">Open risks</div>
@@ -185,11 +207,14 @@ function OverviewTab({ project, memory, actions }: any) {
           Latest decisions
         </div>
         <div className="mt-2 space-y-3">
+          {decisions.length === 0 && (
+            <div className="text-xs text-muted-foreground">No decisions captured yet.</div>
+          )}
           {decisions.slice(0, 4).map((d: any) => (
             <div key={d.id} className="border-l-2 border-foreground/80 pl-3">
               <div className="text-sm font-medium">{d.title}</div>
               <div className="mt-0.5 text-xs text-muted-foreground">
-                {d.date} · {d.source}
+                {d.occurred_on ?? new Date(d.created_at).toLocaleDateString()} · {d.source_label ?? "—"}
               </div>
             </div>
           ))}
@@ -200,15 +225,18 @@ function OverviewTab({ project, memory, actions }: any) {
           Top risks
         </div>
         <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          {risks.length === 0 && (
+            <div className="text-xs text-muted-foreground">No risks flagged.</div>
+          )}
           {risks.map((r: any) => (
             <div key={r.id} className="rounded-md border p-3">
               <div className="flex items-center gap-2">
                 <AlertTriangle className="h-3.5 w-3.5 text-amber-600" />
                 <span className="text-sm font-medium">{r.title}</span>
               </div>
-              <p className="mt-1 text-xs text-muted-foreground">{r.detail}</p>
+              <p className="mt-1 text-xs text-muted-foreground">{r.body}</p>
               <div className="mt-2 text-[10px] uppercase text-muted-foreground">
-                Source: {r.source}
+                Source: {r.source_label ?? "—"}
               </div>
             </div>
           ))}
@@ -249,6 +277,9 @@ function SourcesTab({ sources }: any) {
           <Input placeholder="Filter sources…" className="h-7 w-48 text-xs" />
         </div>
         <div className="divide-y text-sm">
+          {sources.length === 0 && (
+            <div className="p-6 text-center text-xs text-muted-foreground">No sources yet.</div>
+          )}
           {sources.map((s: any) => {
             const KindIcon = kindIcon[s.kind] ?? FileText;
             const sb = statusBadge[s.status as SourceStatus];
@@ -257,9 +288,11 @@ function SourcesTab({ sources }: any) {
               <div key={s.id} className="flex items-center gap-3 px-4 py-2.5">
                 <KindIcon className="h-4 w-4 text-muted-foreground" />
                 <div className="min-w-0 flex-1">
-                  <div className="truncate text-sm">{s.name}</div>
+                  <div className="truncate text-sm">{s.title}</div>
                   <div className="text-[11px] text-muted-foreground">
-                    {s.addedBy} · {s.addedAt} · {(s.sizeKb / 1024).toFixed(1)} MB
+                    {s.uploader_name ?? "—"} ·{" "}
+                    {new Date(s.created_at).toLocaleDateString()} ·{" "}
+                    {s.bytes ? `${(s.bytes / 1024 / 1024).toFixed(1)} MB` : "—"}
                   </div>
                 </div>
                 <Badge variant="outline" className={cn("h-5 gap-1 px-1.5 text-[10px]", sb.cls)}>
@@ -304,9 +337,7 @@ function MemoryTab({ memory }: any) {
             <ScrollArea className="max-h-[520px] flex-1">
               <div className="space-y-2 p-2">
                 {items.length === 0 && (
-                  <div className="p-4 text-center text-[11px] text-muted-foreground">
-                    No items yet
-                  </div>
+                  <div className="p-4 text-center text-[11px] text-muted-foreground">No items yet</div>
                 )}
                 {items.map((m: any) => (
                   <div
@@ -314,12 +345,10 @@ function MemoryTab({ memory }: any) {
                     className={cn("rounded-md border bg-background p-2.5 border-l-2", g.color)}
                   >
                     <div className="text-xs font-medium">{m.title}</div>
-                    <p className="mt-1 line-clamp-3 text-[11px] text-muted-foreground">
-                      {m.detail}
-                    </p>
+                    <p className="mt-1 line-clamp-3 text-[11px] text-muted-foreground">{m.body}</p>
                     <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
-                      <span className="truncate">{m.source}</span>
-                      <span>{m.date}</span>
+                      <span className="truncate">{m.source_label ?? "—"}</span>
+                      <span>{m.occurred_on ?? ""}</span>
                     </div>
                   </div>
                 ))}
@@ -339,7 +368,13 @@ const actionStatusCls: Record<string, string> = {
   blocked: "bg-red-100 text-red-700",
 };
 
-function ActionsTab({ actions }: any) {
+function ActionsTab({ actions, projectId }: { actions: any[]; projectId: string }) {
+  const qc = useQueryClient();
+  const toggle = useServerFn(toggleAction);
+  const m = useMutation({
+    mutationFn: (vars: { actionId: string; status: any }) => toggle({ data: vars }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId] }),
+  });
   return (
     <Card>
       <div className="flex items-center justify-between border-b px-4 py-3">
@@ -360,27 +395,41 @@ function ActionsTab({ actions }: any) {
           </tr>
         </thead>
         <tbody className="divide-y">
+          {actions.length === 0 && (
+            <tr>
+              <td colSpan={6} className="p-6 text-center text-xs text-muted-foreground">
+                No action items yet.
+              </td>
+            </tr>
+          )}
           {actions.map((a: any) => (
             <tr key={a.id} className="hover:bg-muted/30">
               <td className="px-4 py-2.5 font-medium">{a.title}</td>
-              <td className="px-4 py-2.5 text-muted-foreground">{a.owner}</td>
-              <td className="px-4 py-2.5 text-muted-foreground">{a.due}</td>
+              <td className="px-4 py-2.5 text-muted-foreground">{a.owner_name ?? "—"}</td>
+              <td className="px-4 py-2.5 text-muted-foreground">{a.due_date ?? "—"}</td>
               <td className="px-4 py-2.5">
                 <Badge variant="outline" className="text-[10px] capitalize">
                   {a.priority}
                 </Badge>
               </td>
               <td className="px-4 py-2.5">
-                <span
+                <button
+                  disabled={m.isPending}
+                  onClick={() =>
+                    m.mutate({
+                      actionId: a.id,
+                      status: a.status === "done" ? "open" : "done",
+                    })
+                  }
                   className={cn(
                     "rounded px-1.5 py-0.5 text-[10px] font-medium capitalize",
                     actionStatusCls[a.status],
                   )}
                 >
-                  {a.status.replace("_", " ")}
-                </span>
+                  {String(a.status).replace("_", " ")}
+                </button>
               </td>
-              <td className="px-4 py-2.5 text-xs text-muted-foreground">{a.source}</td>
+              <td className="px-4 py-2.5 text-xs text-muted-foreground">{a.source_label ?? "—"}</td>
             </tr>
           ))}
         </tbody>
@@ -415,13 +464,17 @@ function ArtifactsTab({ artifacts }: any) {
       <Card className="lg:col-span-2">
         <div className="border-b px-4 py-3 text-sm font-semibold">Recent artifacts</div>
         <div className="divide-y">
+          {artifacts.length === 0 && (
+            <div className="p-6 text-center text-xs text-muted-foreground">No artifacts yet.</div>
+          )}
           {artifacts.map((a: any) => (
             <div key={a.id} className="flex items-center gap-3 px-4 py-3">
               <FileText className="h-4 w-4 text-muted-foreground" />
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm font-medium">{a.title}</div>
                 <div className="text-[11px] text-muted-foreground">
-                  {a.type} · {a.createdAt} · {a.createdBy}
+                  {a.kind.replace("_", " ")} ·{" "}
+                  {new Date(a.created_at).toLocaleDateString()} · {a.creator_name ?? "—"}
                 </div>
               </div>
               <Button size="sm" variant="ghost">
@@ -436,118 +489,34 @@ function ArtifactsTab({ artifacts }: any) {
 }
 
 function ConsoleTab({ projectName }: { projectName: string }) {
-  const [messages, setMessages] = useState<{ role: "user" | "ai"; text: string }[]>([
-    {
-      role: "ai",
-      text: `Hi — I have full context on ${projectName}, including 87 sources and the memory graph. Ask about decisions, risks, owners, or generate a draft.`,
-    },
-  ]);
   const [input, setInput] = useState("");
-  const suggestions = [
-    "Summarize the last steering meeting",
-    "What are the top 3 risks and proposed mitigations?",
-    "Draft a status update for the executive sponsor",
-    "Who owns the APAC cutover decision?",
-  ];
-
-  function send(text: string) {
-    if (!text.trim()) return;
-    setMessages((m) => [
-      ...m,
-      { role: "user", text },
-      {
-        role: "ai",
-        text: "Drawing from EMEA Steering (5/24), Cutover Plan v4, and Risk Register — the top open thread is APAC cutover window confirmation. K. Tanaka owns the decision; due 5/30. Two high-priority risks (master data quality, sponsor capacity) feed directly into this. Recommend a 15-minute async update to the steering committee today.",
-      },
-    ]);
-    setInput("");
-  }
-
   return (
-    <div className="grid h-[calc(100vh-13rem)] grid-cols-1 lg:grid-cols-4">
-      <div className="hidden border-r p-4 lg:block">
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Context scope
-        </div>
-        <div className="mt-2 space-y-1.5 text-xs">
-          <label className="flex items-center gap-2"><input type="checkbox" defaultChecked /> All sources (87)</label>
-          <label className="flex items-center gap-2"><input type="checkbox" defaultChecked /> Memory graph</label>
-          <label className="flex items-center gap-2"><input type="checkbox" defaultChecked /> Action items</label>
-          <label className="flex items-center gap-2"><input type="checkbox" /> Archived items</label>
-        </div>
-        <Separator className="my-4" />
-        <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-          Threads
-        </div>
-        <div className="mt-2 space-y-1 text-xs">
-          {["Risk synthesis 5/24", "APAC timeline review", "Board prep notes"].map((t) => (
-            <div key={t} className="truncate rounded px-2 py-1 hover:bg-muted">{t}</div>
-          ))}
+    <div className="flex h-[calc(100vh-220px)] flex-col">
+      <div className="flex-1 overflow-y-auto p-4 lg:p-6">
+        <div className="mx-auto max-w-3xl space-y-4">
+          <div className="text-xs text-muted-foreground">
+            Ask anything about <span className="font-medium text-foreground">{projectName}</span>. The
+            AI answers using project memory and sources. (Live AI wiring coming next.)
+          </div>
+          <Card className="p-4 text-sm text-muted-foreground">
+            <p className="text-foreground">
+              Try: "Summarize the last steering meeting" · "What decisions are still pending?" ·
+              "Draft a follow-up to the sponsor."
+            </p>
+          </Card>
         </div>
       </div>
-      <div className="flex flex-col lg:col-span-3">
-        <ScrollArea className="flex-1">
-          <div className="mx-auto max-w-3xl space-y-4 p-4 lg:p-6">
-            {messages.map((m, i) => (
-              <div key={i} className={cn("flex", m.role === "user" && "justify-end")}>
-                <div
-                  className={cn(
-                    "max-w-[80%] rounded-lg px-3 py-2 text-sm",
-                    m.role === "user"
-                      ? "bg-foreground text-background"
-                      : "border bg-background",
-                  )}
-                >
-                  {m.text}
-                  {m.role === "ai" && (
-                    <div className="mt-2 flex flex-wrap gap-1 border-t pt-2 text-[10px] text-muted-foreground">
-                      <Badge variant="outline" className="h-4 px-1 text-[9px]">EMEA Steering 5/24</Badge>
-                      <Badge variant="outline" className="h-4 px-1 text-[9px]">Cutover Plan v4</Badge>
-                      <Badge variant="outline" className="h-4 px-1 text-[9px]">Risk Register</Badge>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </ScrollArea>
-        <div className="border-t bg-background p-3 lg:p-4">
-          <div className="mx-auto max-w-3xl">
-            <div className="mb-2 flex flex-wrap gap-1.5">
-              {suggestions.map((s) => (
-                <button
-                  key={s}
-                  onClick={() => send(s)}
-                  className="rounded-full border px-2.5 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                send(input);
-              }}
-              className="flex items-end gap-2"
-            >
-              <Textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                placeholder={`Ask anything about ${projectName}…`}
-                className="min-h-[44px] resize-none text-sm"
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !e.shiftKey) {
-                    e.preventDefault();
-                    send(input);
-                  }
-                }}
-              />
-              <Button type="submit" size="icon">
-                <Send className="h-4 w-4" />
-              </Button>
-            </form>
-          </div>
+      <div className="border-t bg-background p-3 lg:p-4">
+        <div className="mx-auto flex max-w-3xl items-center gap-2">
+          <Input
+            placeholder={`Ask about ${projectName}…`}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            className="h-10"
+          />
+          <Button size="sm">
+            <Send className="h-3.5 w-3.5" /> Send
+          </Button>
         </div>
       </div>
     </div>
