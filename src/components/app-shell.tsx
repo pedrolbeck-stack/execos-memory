@@ -9,13 +9,14 @@ import {
   Bell,
   Plus,
 } from "lucide-react";
+import type { ComponentType } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
 import { projects } from "@/lib/mock-data";
 
-const nav = [
+const nav: { to: string; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
   { to: "/projects", label: "All Projects", icon: FolderKanban },
   { to: "/inbox", label: "Inbox", icon: Inbox },
@@ -44,18 +45,19 @@ export function AppShell({ children }: { children: React.ReactNode }) {
             <div className="space-y-0.5">
               {nav.map((n) => {
                 const active = n.to === "/" ? path === "/" : path.startsWith(n.to);
+                const Icon = n.icon;
                 return (
-                  <Link
+                  <a
                     key={n.to}
-                    to={n.to}
+                    href={n.to}
                     className={cn(
                       "flex items-center gap-2 rounded-md px-2 py-1.5 text-muted-foreground hover:bg-muted hover:text-foreground",
                       active && "bg-muted text-foreground font-medium",
                     )}
                   >
-                    <n.icon className="h-4 w-4" />
+                    <Icon className="h-4 w-4" />
                     {n.label}
-                  </Link>
+                  </a>
                 );
               })}
             </div>
