@@ -1,6 +1,4 @@
 import { Link, useRouterState } from "@tanstack/react-router";
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-const _LinkRef = Link;
 import {
   LayoutDashboard,
   FolderKanban,
