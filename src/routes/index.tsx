@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUpRight,
   Activity,
@@ -13,7 +14,8 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { projects, recentActivity } from "@/lib/mock-data";
+import { recentActivity } from "@/lib/mock-data";
+import { listProjects } from "@/lib/execos-data";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/")({ component: Dashboard });
@@ -45,6 +47,12 @@ function Stat({ label, value, sub, icon: Icon }: { label: string; value: string;
 }
 
 function Dashboard() {
+  const projectsQuery = useQuery({
+    queryKey: ["projects"],
+    queryFn: listProjects,
+  });
+  const projects = projectsQuery.data?.projects ?? [];
+  const isLive = projectsQuery.data?.isLive ?? false;
   const openActions = projects.reduce((s, p) => s + p.openActions, 0);
   const openRisks = projects.reduce((s, p) => s + p.openRisks, 0);
   const totalSources = projects.reduce((s, p) => s + p.sourceCount, 0);
@@ -59,7 +67,7 @@ function Dashboard() {
             </div>
             <h1 className="mt-0.5 text-xl font-semibold tracking-tight">Good morning, Morgan</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              6 active projects · 3 updates overnight · 2 items waiting on you
+              {isLive ? "Live Supabase workspace" : "Demo workspace"} · {projects.length} active projects · 2 items waiting on you
             </p>
           </div>
           <div className="flex gap-2">
@@ -90,6 +98,22 @@ function Dashboard() {
               </Button>
             </div>
             <Card className="divide-y">
+              {projectsQuery.isLoading && (
+                <div className="px-4 py-6 text-sm text-muted-foreground">Loading projects...</div>
+              )}
+              {projectsQuery.error && (
+                <div className="px-4 py-6 text-sm text-destructive">
+                  Could not load Supabase projects. Check auth, env vars, and RLS policies.
+                </div>
+              )}
+              {!projectsQuery.isLoading && projects.length === 0 && (
+                <div className="px-4 py-8 text-sm">
+                  <div className="font-medium">No live projects yet</div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Create your first project from the Supabase-backed workspace setup.
+                  </p>
+                </div>
+              )}
               {projects.map((p) => (
                 <Link
                   key={p.id}

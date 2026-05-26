@@ -30,23 +30,16 @@ import { Textarea } from "@/components/ui/textarea";
 import { Progress } from "@/components/ui/progress";
 import { Separator } from "@/components/ui/separator";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import {
-  projectById,
-  sources as allSources,
-  memory as allMemory,
-  actions as allActions,
-  artifacts as allArtifacts,
-  ARTIFACT_TYPES,
-  type SourceStatus,
-} from "@/lib/mock-data";
+import { ARTIFACT_TYPES, type SourceStatus } from "@/lib/mock-data";
+import { getProjectWorkspaceData } from "@/lib/execos-data";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/projects/$projectId")({
   component: ProjectWorkspace,
-  loader: ({ params }) => {
-    const p = projectById(params.projectId);
-    if (!p) throw notFound();
-    return { project: p };
+  loader: async ({ params }) => {
+    const data = await getProjectWorkspaceData(params.projectId);
+    if (!data) throw notFound();
+    return data;
   },
 });
 
@@ -66,11 +59,7 @@ const kindIcon: Record<string, any> = {
 };
 
 function ProjectWorkspace() {
-  const { project } = Route.useLoaderData();
-  const sources = allSources.filter((s) => s.projectId === project.id);
-  const memory = allMemory.filter((m) => m.projectId === project.id);
-  const actions = allActions.filter((a) => a.projectId === project.id);
-  const artifacts = allArtifacts.filter((a) => a.projectId === project.id);
+  const { project, sources, memory, actions, artifacts, isLive } = Route.useLoaderData();
 
   return (
     <AppShell>
@@ -92,6 +81,9 @@ function ProjectWorkspace() {
           <div className="flex items-center gap-2">
             <Badge variant="outline" className="capitalize">
               {project.health.replace("_", " ")}
+            </Badge>
+            <Badge variant="outline" className={isLive ? "border-emerald-200 bg-emerald-50 text-emerald-700" : ""}>
+              {isLive ? "Live" : "Demo"}
             </Badge>
             <Button size="sm" variant="outline">
               <Upload className="h-3.5 w-3.5" /> Add source

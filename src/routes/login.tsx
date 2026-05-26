@@ -3,12 +3,48 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { ensureSignedInUserWorkspace } from "@/lib/execos-data";
+import { hasSupabaseConfig, supabase } from "@/lib/supabase";
 
 export const Route = createFileRoute("/login")({ component: LoginPage });
 
 function LoginPage() {
   const nav = useNavigate();
   const [email, setEmail] = useState("morgan@apex.co");
+  const [password, setPassword] = useState("");
+  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  async function submit() {
+    setError(null);
+
+    if (!hasSupabaseConfig || !supabase) {
+      nav({ to: "/" });
+      return;
+    }
+
+    setLoading(true);
+    const authResult =
+      mode === "sign-up"
+        ? await supabase.auth.signUp({ email, password })
+        : await supabase.auth.signInWithPassword({ email, password });
+
+    if (authResult.error) {
+      setLoading(false);
+      setError(authResult.error.message);
+      return;
+    }
+
+    try {
+      await ensureSignedInUserWorkspace();
+      nav({ to: "/" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Could not prepare your workspace.");
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
     <div className="grid min-h-screen lg:grid-cols-2">
@@ -52,7 +88,7 @@ function LoginPage() {
           <form
             onSubmit={(e) => {
               e.preventDefault();
-              nav({ to: "/" });
+              void submit();
             }}
             className="space-y-3"
           >
@@ -72,10 +108,23 @@ function LoginPage() {
               <Label htmlFor="pw" className="text-xs">
                 Password
               </Label>
-              <Input id="pw" type="password" defaultValue="executiveorder66" />
+              <Input
+                id="pw"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder={hasSupabaseConfig ? "Enter your password" : "Demo mode"}
+                required={hasSupabaseConfig}
+              />
             </div>
-            <Button type="submit" className="w-full">
-              Continue to workspace
+            {error && <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>}
+            {!hasSupabaseConfig && (
+              <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                Supabase env vars are not configured, so login continues in mock demo mode.
+              </div>
+            )}
+            <Button type="submit" className="w-full" disabled={loading}>
+              {loading ? "Preparing workspace..." : mode === "sign-up" ? "Create workspace" : "Continue to workspace"}
             </Button>
           </form>
           <div className="relative text-center text-xs text-muted-foreground">
@@ -83,11 +132,15 @@ function LoginPage() {
             <div className="absolute inset-x-0 top-1/2 -z-10 h-px bg-border" />
           </div>
           <div className="space-y-2">
-            <Button variant="outline" className="w-full" onClick={() => nav({ to: "/" })}>
-              Continue with Google
+            <Button
+              variant="outline"
+              className="w-full"
+              onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
+            >
+              {mode === "sign-in" ? "Create an account" : "Use an existing account"}
             </Button>
             <Button variant="outline" className="w-full" onClick={() => nav({ to: "/" })}>
-              Continue with SSO
+              Continue in demo mode
             </Button>
           </div>
           <p className="text-center text-xs text-muted-foreground">
