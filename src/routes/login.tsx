@@ -1,46 +1,44 @@
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { useState } from "react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { ensureSignedInUserWorkspace } from "@/lib/execos-data";
-import { hasSupabaseConfig, supabase } from "@/lib/supabase";
+import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/login")({ component: LoginPage });
 
 function LoginPage() {
   const nav = useNavigate();
-  const [email, setEmail] = useState("morgan@apex.co");
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"sign-in" | "sign-up">("sign-in");
-  const [error, setError] = useState<string | null>(null);
+  const [fullName, setFullName] = useState("");
   const [loading, setLoading] = useState(false);
 
-  async function submit() {
-    setError(null);
-
-    if (!hasSupabaseConfig || !supabase) {
-      nav({ to: "/" });
-      return;
-    }
-
+  async function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
     setLoading(true);
-    const authResult =
-      mode === "sign-up"
-        ? await supabase.auth.signUp({ email, password })
-        : await supabase.auth.signInWithPassword({ email, password });
-
-    if (authResult.error) {
-      setLoading(false);
-      setError(authResult.error.message);
-      return;
-    }
-
     try {
-      await ensureSignedInUserWorkspace();
-      nav({ to: "/" });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not prepare your workspace.");
+      if (mode === "signup") {
+        const { error } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            emailRedirectTo: window.location.origin,
+            data: { full_name: fullName || email.split("@")[0] },
+          },
+        });
+        if (error) throw error;
+        toast.success("Welcome to ExecOS");
+        nav({ to: "/" });
+      } else {
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
+        nav({ to: "/" });
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Authentication failed");
     } finally {
       setLoading(false);
     }
@@ -61,7 +59,7 @@ function LoginPage() {
           </h1>
           <p className="text-sm text-background/70">
             Upload meetings, transcripts, and notes. ExecOS extracts decisions, actions, risks, and
-            stakeholders — then drafts the brief, the email, the plan.
+            stakeholders - then drafts the brief, the email, the plan.
           </p>
           <div className="grid grid-cols-3 gap-3 pt-4 text-xs text-background/60">
             <div>
@@ -80,18 +78,29 @@ function LoginPage() {
       <div className="flex items-center justify-center p-6 sm:p-10">
         <div className="w-full max-w-sm space-y-6">
           <div>
-            <h2 className="text-xl font-semibold tracking-tight">Sign in</h2>
+            <h2 className="text-xl font-semibold tracking-tight">
+              {mode === "signin" ? "Sign in" : "Create your account"}
+            </h2>
             <p className="mt-1 text-sm text-muted-foreground">
-              Use your work email to continue to your workspace.
+              {mode === "signin"
+                ? "Use your work email to continue to your workspace."
+                : "Get started with the Apex Operations demo workspace."}
             </p>
           </div>
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              void submit();
-            }}
-            className="space-y-3"
-          >
+          <form onSubmit={handleSubmit} className="space-y-3">
+            {mode === "signup" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="name" className="text-xs">
+                  Full name
+                </Label>
+                <Input
+                  id="name"
+                  value={fullName}
+                  onChange={(e) => setFullName(e.target.value)}
+                  placeholder="Morgan Chen"
+                />
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label htmlFor="email" className="text-xs">
                 Work email
@@ -102,6 +111,7 @@ function LoginPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                autoComplete="email"
               />
             </div>
             <div className="space-y-1.5">
@@ -113,38 +123,46 @@ function LoginPage() {
                 type="password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                placeholder={hasSupabaseConfig ? "Enter your password" : "Demo mode"}
-                required={hasSupabaseConfig}
+                required
+                minLength={8}
+                autoComplete={mode === "signin" ? "current-password" : "new-password"}
               />
             </div>
-            {error && <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">{error}</div>}
-            {!hasSupabaseConfig && (
-              <div className="rounded-md border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                Supabase env vars are not configured, so login continues in mock demo mode.
-              </div>
-            )}
             <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? "Preparing workspace..." : mode === "sign-up" ? "Create workspace" : "Continue to workspace"}
+              {loading
+                ? "Working..."
+                : mode === "signin"
+                  ? "Continue to workspace"
+                  : "Create account"}
             </Button>
           </form>
-          <div className="relative text-center text-xs text-muted-foreground">
-            <span className="bg-background px-2">or</span>
-            <div className="absolute inset-x-0 top-1/2 -z-10 h-px bg-border" />
-          </div>
-          <div className="space-y-2">
-            <Button
-              variant="outline"
-              className="w-full"
-              onClick={() => setMode(mode === "sign-in" ? "sign-up" : "sign-in")}
-            >
-              {mode === "sign-in" ? "Create an account" : "Use an existing account"}
-            </Button>
-            <Button variant="outline" className="w-full" onClick={() => nav({ to: "/" })}>
-              Continue in demo mode
-            </Button>
-          </div>
           <p className="text-center text-xs text-muted-foreground">
-            New to ExecOS? <Link to="/" className="font-medium text-foreground underline">Request access</Link>
+            {mode === "signin" ? (
+              <>
+                New to ExecOS?{" "}
+                <button
+                  onClick={() => setMode("signup")}
+                  className="font-medium text-foreground underline"
+                >
+                  Create an account
+                </button>
+              </>
+            ) : (
+              <>
+                Already have an account?{" "}
+                <button
+                  onClick={() => setMode("signin")}
+                  className="font-medium text-foreground underline"
+                >
+                  Sign in
+                </button>
+              </>
+            )}
+          </p>
+          <p className="text-center text-[10px] text-muted-foreground">
+            <Link to="/" className="hover:underline">
+              Back to home
+            </Link>
           </p>
         </div>
       </div>

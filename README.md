@@ -12,7 +12,7 @@ The product loop is:
 
 ## Current State
 
-This repo currently contains a Lovable-generated TanStack/Vite UI with mock fallback data plus the first Supabase connection layer for auth and project reads. The next layer is Supabase-backed mutations, storage uploads, and AI processing through Edge Functions.
+This repo contains a Lovable-generated TanStack/Vite UI with Supabase-backed auth, protected routes, seeded demo workspace data, and server functions for project reads/actions. The next layer is storage upload processing and AI generation through Edge Functions or TanStack server functions.
 
 ## Local Development
 
@@ -32,10 +32,10 @@ npm run dev
 
 ## Backend Contract
 
-The initial Supabase schema and RLS policies live in:
+The current Supabase schema and RLS policies live in:
 
 ```text
-supabase/migrations/20260525153500_initial_execos_schema.sql
+supabase/migrations/20260525193528_4a5f6c9c-2ab2-400a-819c-c6d169c0d8c5.sql
 ```
 
 See `supabase/README.md` for setup notes and the next backend steps.

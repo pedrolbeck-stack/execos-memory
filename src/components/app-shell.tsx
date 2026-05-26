@@ -1,4 +1,6 @@
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useRouterState, useNavigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
+import { useQuery } from "@tanstack/react-query";
 import {
   LayoutDashboard,
   FolderKanban,
@@ -8,13 +10,16 @@ import {
   Search,
   Bell,
   Plus,
+  LogOut,
 } from "lucide-react";
 import type { ComponentType } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { cn } from "@/lib/utils";
-import { projects } from "@/lib/mock-data";
+import { supabase } from "@/integrations/supabase/client";
+import { listProjects } from "@/lib/projects.functions";
+import { getCurrentWorkspace } from "@/lib/workspace.functions";
 
 const nav: { to: string; label: string; icon: ComponentType<{ className?: string }> }[] = [
   { to: "/", label: "Dashboard", icon: LayoutDashboard },
@@ -24,13 +29,36 @@ const nav: { to: string; label: string; icon: ComponentType<{ className?: string
   { to: "/settings", label: "Settings", icon: Settings },
 ];
 
+function initials(name?: string | null) {
+  if (!name) return "··";
+  return name
+    .split(" ")
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+}
+
 export function AppShell({ children }: { children: React.ReactNode }) {
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const nav2 = useNavigate();
+
+  const list = useServerFn(listProjects);
+  const ws = useServerFn(getCurrentWorkspace);
+  const projectsQ = useQuery({ queryKey: ["projects"], queryFn: () => list() });
+  const wsQ = useQuery({ queryKey: ["workspace"], queryFn: () => ws() });
+
+  const projects = projectsQ.data?.projects ?? [];
+
+  async function logout() {
+    await supabase.auth.signOut();
+    nav2({ to: "/login" });
+  }
 
   return (
     <div className="min-h-screen bg-muted/30 text-foreground">
       <div className="flex">
-        {/* Sidebar */}
         <aside className="fixed inset-y-0 left-0 z-20 hidden w-56 flex-col border-r bg-background lg:flex">
           <div className="flex h-14 items-center gap-2 border-b px-4">
             <div className="grid h-7 w-7 place-items-center rounded-md bg-foreground text-background text-[11px] font-bold">
@@ -62,9 +90,11 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               })}
             </div>
             <div className="mt-5 px-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Workspaces
+              Workspace
             </div>
-            <div className="mt-1 px-2 text-xs text-muted-foreground">Apex Operating Co.</div>
+            <div className="mt-1 px-2 text-xs text-muted-foreground">
+              {wsQ.data?.activeWorkspace?.name ?? "—"}
+            </div>
             <div className="mt-5 flex items-center justify-between px-2">
               <div className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
                 Pinned projects
@@ -72,7 +102,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <Plus className="h-3 w-3 text-muted-foreground" />
             </div>
             <div className="mt-1 space-y-0.5">
-              {projects.slice(0, 5).map((p) => (
+              {projects.slice(0, 6).map((p: any) => (
                 <Link
                   key={p.id}
                   to="/projects/$projectId"
@@ -98,17 +128,29 @@ export function AppShell({ children }: { children: React.ReactNode }) {
           <div className="border-t p-3">
             <div className="flex items-center gap-2">
               <Avatar className="h-7 w-7">
-                <AvatarFallback className="text-[10px]">MC</AvatarFallback>
+                <AvatarFallback className="text-[10px]">
+                  {initials(wsQ.data?.profile?.full_name)}
+                </AvatarFallback>
               </Avatar>
-              <div className="min-w-0 text-xs">
-                <div className="truncate font-medium">Morgan Chen</div>
-                <div className="truncate text-muted-foreground">Chief of Staff</div>
+              <div className="min-w-0 flex-1 text-xs">
+                <div className="truncate font-medium">{wsQ.data?.profile?.full_name ?? "—"}</div>
+                <div className="truncate text-muted-foreground">
+                  {wsQ.data?.profile?.title ?? "Member"}
+                </div>
               </div>
+              <Button
+                onClick={logout}
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                title="Sign out"
+              >
+                <LogOut className="h-3.5 w-3.5" />
+              </Button>
             </div>
           </div>
         </aside>
 
-        {/* Main */}
         <div className="flex-1 lg:pl-56">
           <header className="sticky top-0 z-10 flex h-14 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur lg:px-6">
             <div className="relative w-full max-w-sm">

@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { useQuery } from "@tanstack/react-query";
 import {
   ArrowUpRight,
@@ -14,11 +15,11 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
-import { recentActivity } from "@/lib/mock-data";
-import { listProjects } from "@/lib/execos-data";
+import { listProjects } from "@/lib/projects.functions";
+import { getCurrentWorkspace } from "@/lib/workspace.functions";
 import { cn } from "@/lib/utils";
 
-export const Route = createFileRoute("/")({ component: Dashboard });
+export const Route = createFileRoute("/_authenticated/")({ component: Dashboard });
 
 const healthColor: Record<string, string> = {
   on_track: "text-emerald-700 bg-emerald-50 border-emerald-200",
@@ -31,7 +32,17 @@ const healthLabel: Record<string, string> = {
   off_track: "Off track",
 };
 
-function Stat({ label, value, sub, icon: Icon }: { label: string; value: string; sub?: string; icon: any }) {
+function Stat({
+  label,
+  value,
+  sub,
+  icon: Icon,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  icon: any;
+}) {
   return (
     <Card className="p-4">
       <div className="flex items-center justify-between">
@@ -47,15 +58,19 @@ function Stat({ label, value, sub, icon: Icon }: { label: string; value: string;
 }
 
 function Dashboard() {
-  const projectsQuery = useQuery({
-    queryKey: ["projects"],
-    queryFn: listProjects,
-  });
-  const projects = projectsQuery.data?.projects ?? [];
-  const isLive = projectsQuery.data?.isLive ?? false;
-  const openActions = projects.reduce((s, p) => s + p.openActions, 0);
-  const openRisks = projects.reduce((s, p) => s + p.openRisks, 0);
-  const totalSources = projects.reduce((s, p) => s + p.sourceCount, 0);
+  const list = useServerFn(listProjects);
+  const ws = useServerFn(getCurrentWorkspace);
+
+  const projectsQ = useQuery({ queryKey: ["projects"], queryFn: () => list() });
+  const wsQ = useQuery({ queryKey: ["workspace"], queryFn: () => ws() });
+
+  const projects = projectsQ.data?.projects ?? [];
+  const openActions = projects.reduce((s: number, p: any) => s + (p.open_actions ?? 0), 0);
+  const openRisks = projects.reduce((s: number, p: any) => s + (p.open_risks ?? 0), 0);
+  const totalSources = projects.reduce((s: number, p: any) => s + (p.source_count ?? 0), 0);
+  const atRisk = projects.filter((p: any) => p.health !== "on_track").length;
+
+  const firstName = wsQ.data?.profile?.full_name?.split(" ")[0] ?? "there";
 
   return (
     <AppShell>
@@ -63,11 +78,18 @@ function Dashboard() {
         <div className="flex flex-wrap items-end justify-between gap-3">
           <div>
             <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-              Monday · May 25, 2026
+              {new Date().toLocaleDateString(undefined, {
+                weekday: "long",
+                month: "long",
+                day: "numeric",
+                year: "numeric",
+              })}
             </div>
-            <h1 className="mt-0.5 text-xl font-semibold tracking-tight">Good morning, Morgan</h1>
+            <h1 className="mt-0.5 text-xl font-semibold tracking-tight">
+              Good morning, {firstName}
+            </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {isLive ? "Live Supabase workspace" : "Demo workspace"} · {projects.length} active projects · 2 items waiting on you
+              {projects.length} active projects · {atRisk} not on track · {openActions} open actions
             </p>
           </div>
           <div className="flex gap-2">
@@ -83,10 +105,15 @@ function Dashboard() {
 
       <div className="space-y-6 p-4 lg:p-6">
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <Stat label="Active projects" value="6" sub="2 at risk · 1 off track" icon={Activity} />
-          <Stat label="Open actions" value={String(openActions)} sub="4 due this week" icon={CheckCircle2} />
-          <Stat label="Open risks" value={String(openRisks)} sub="3 high priority" icon={AlertTriangle} />
-          <Stat label="Sources indexed" value={String(totalSources)} sub="12 processing" icon={Clock} />
+          <Stat
+            label="Active projects"
+            value={String(projects.length)}
+            sub={`${atRisk} need attention`}
+            icon={Activity}
+          />
+          <Stat label="Open actions" value={String(openActions)} icon={CheckCircle2} />
+          <Stat label="Open risks" value={String(openRisks)} icon={AlertTriangle} />
+          <Stat label="Sources indexed" value={String(totalSources)} icon={Clock} />
         </div>
 
         <div className="grid gap-6 lg:grid-cols-3">
@@ -98,23 +125,22 @@ function Dashboard() {
               </Button>
             </div>
             <Card className="divide-y">
-              {projectsQuery.isLoading && (
-                <div className="px-4 py-6 text-sm text-muted-foreground">Loading projects...</div>
-              )}
-              {projectsQuery.error && (
-                <div className="px-4 py-6 text-sm text-destructive">
-                  Could not load Supabase projects. Check auth, env vars, and RLS policies.
+              {projectsQ.isLoading && (
+                <div className="p-6 text-center text-xs text-muted-foreground">
+                  Loading projects...
                 </div>
               )}
-              {!projectsQuery.isLoading && projects.length === 0 && (
-                <div className="px-4 py-8 text-sm">
-                  <div className="font-medium">No live projects yet</div>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    Create your first project from the Supabase-backed workspace setup.
-                  </p>
+              {projectsQ.isError && (
+                <div className="p-6 text-center text-xs text-destructive">
+                  Could not load projects. Check Supabase auth and environment variables.
                 </div>
               )}
-              {projects.map((p) => (
+              {!projectsQ.isLoading && projects.length === 0 && (
+                <div className="p-6 text-center text-xs text-muted-foreground">
+                  No projects yet. Create your first project to get started.
+                </div>
+              )}
+              {projects.map((p: any) => (
                 <Link
                   key={p.id}
                   to="/projects/$projectId"
@@ -133,9 +159,11 @@ function Dashboard() {
                         </Badge>
                       </div>
                       <div className="mt-0.5 text-xs text-muted-foreground">
-                        {p.client} · Owner {p.owner}
+                        {p.client ?? "-"} · Owner {p.owner_name ?? "Unassigned"}
                       </div>
-                      <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">{p.summary}</p>
+                      <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+                        {p.summary}
+                      </p>
                     </div>
                     <div className="hidden w-40 shrink-0 sm:block">
                       <div className="flex justify-between text-[10px] text-muted-foreground">
@@ -145,8 +173,8 @@ function Dashboard() {
                       <Progress value={p.progress} className="mt-1 h-1.5" />
                     </div>
                     <div className="hidden w-32 shrink-0 text-right text-xs text-muted-foreground md:block">
-                      <div>{p.openActions} actions</div>
-                      <div>{p.openRisks} risks</div>
+                      <div>{p.open_actions} actions</div>
+                      <div>{p.open_risks} risks</div>
                     </div>
                   </div>
                 </Link>
@@ -155,18 +183,19 @@ function Dashboard() {
           </div>
 
           <div className="space-y-3">
-            <h2 className="text-sm font-semibold tracking-tight">Recent activity</h2>
-            <Card className="divide-y">
-              {recentActivity.map((a) => (
-                <div key={a.id} className="px-4 py-3 text-xs">
-                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
-                    <span className="font-medium text-foreground">{a.projectName}</span>
-                    <span>{a.when}</span>
-                  </div>
-                  <p className="mt-1 text-foreground/90">{a.text}</p>
-                  <div className="mt-1 text-[10px] text-muted-foreground">by {a.actor}</div>
-                </div>
-              ))}
+            <h2 className="text-sm font-semibold tracking-tight">Workspace</h2>
+            <Card className="p-4 text-sm">
+              <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                Active workspace
+              </div>
+              <div className="mt-1 font-semibold">{wsQ.data?.activeWorkspace?.name ?? "-"}</div>
+              <div className="mt-3 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                You
+              </div>
+              <div className="mt-1">{wsQ.data?.profile?.full_name ?? "-"}</div>
+              <div className="text-xs text-muted-foreground">
+                {wsQ.data?.profile?.title ?? "Member"}
+              </div>
             </Card>
           </div>
         </div>
