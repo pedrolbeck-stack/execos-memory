@@ -21,8 +21,13 @@ import {
   Loader2,
   XCircle,
   Link2,
+  MonitorUp,
+  Square,
+  Radio,
+  Wand2,
 } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
+import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card } from "@/components/ui/card";
@@ -33,6 +38,9 @@ import { Progress } from "@/components/ui/progress";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { getProject } from "@/lib/projects.functions";
 import { toggleAction } from "@/lib/actions.functions";
+import { createSource } from "@/lib/sources.functions";
+import { createArtifact } from "@/lib/artifacts.functions";
+import { supabase } from "@/integrations/supabase/client";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/projects/$projectId")({
@@ -42,9 +50,11 @@ export const Route = createFileRoute("/_authenticated/projects/$projectId")({
 const ARTIFACT_TYPES = [
   { key: "exec_brief", label: "Executive Brief", desc: "One-page narrative for leadership: status, risks, asks." },
   { key: "meeting_summary", label: "Meeting Summary", desc: "Decisions, actions, open questions from a meeting." },
-  { key: "prd", label: "Product Requirements Doc", desc: "PRD synthesized from sources and decisions." },
-  { key: "sop", label: "Standard Operating Procedure", desc: "Step-by-step SOP derived from project memory." },
   { key: "project_plan", label: "Project Plan", desc: "Workstreams, milestones, owners, dependencies." },
+  { key: "prd", label: "PRD", desc: "Problem, goals, requirements, scope, and acceptance criteria." },
+  { key: "sop", label: "SOP", desc: "Step-by-step operating procedure derived from project memory." },
+  { key: "swot", label: "SWOT", desc: "Strengths, weaknesses, opportunities, and threats." },
+  { key: "sprint_plan", label: "Sprint Planning", desc: "Sprint goal, backlog candidates, owners, risks, and ceremonies." },
   { key: "followup_email", label: "Follow-up Email", desc: "Drafted recap email to a stakeholder." },
   { key: "meeting_prep", label: "Meeting Prep", desc: "Briefing pack with context, talking points, decisions needed." },
 ];
@@ -152,7 +162,7 @@ function ProjectWorkspace() {
             <OverviewTab project={project} memory={memory} actions={actions} />
           </TabsContent>
           <TabsContent value="sources" className="mt-0 p-4 lg:p-6">
-            <SourcesTab sources={sources} />
+            <SourcesTab sources={sources} projectId={projectId} />
           </TabsContent>
           <TabsContent value="memory" className="mt-0 p-4 lg:p-6">
             <MemoryTab memory={memory} />
@@ -161,7 +171,13 @@ function ProjectWorkspace() {
             <ActionsTab actions={actions} projectId={projectId} />
           </TabsContent>
           <TabsContent value="artifacts" className="mt-0 p-4 lg:p-6">
-            <ArtifactsTab artifacts={artifacts} />
+            <ArtifactsTab
+              actions={actions}
+              artifacts={artifacts}
+              memory={memory}
+              project={project}
+              projectId={projectId}
+            />
           </TabsContent>
           <TabsContent value="console" className="mt-0">
             <ConsoleTab projectName={project.name} />
@@ -246,28 +262,189 @@ function OverviewTab({ project, memory, actions }: any) {
   );
 }
 
-function SourcesTab({ sources }: any) {
+type CaptureKind = "screen" | "voice" | "meeting";
+
+function SourcesTab({ sources, projectId }: { sources: any[]; projectId: string }) {
+  const qc = useQueryClient();
+  const addSource = useServerFn(createSource);
+  const chunksRef = useRef<BlobPart[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const [capture, setCapture] = useState<{ kind: CaptureKind; label: string } | null>(null);
+  const [captureError, setCaptureError] = useState<string | null>(null);
+  const [meetingNotes, setMeetingNotes] = useState("");
+
+  const sourceMutation = useMutation({
+    mutationFn: (vars: {
+      bytes?: number;
+      content?: string;
+      kind: "audio" | "video" | "note";
+      mime?: string;
+      storagePath?: string;
+      title: string;
+    }) => addSource({ data: { projectId, ...vars } }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["project", projectId] }),
+  });
+
+  async function saveCapture(kind: CaptureKind, blob: Blob) {
+    const sourceKind = kind === "voice" ? "audio" : "video";
+    const id = crypto.randomUUID();
+    const storagePath = `${projectId}/${id}-${kind}.webm`;
+    const title =
+      kind === "voice"
+        ? `Voice note ${new Date().toLocaleString()}`
+        : kind === "meeting"
+          ? `Meeting companion capture ${new Date().toLocaleString()}`
+          : `Screen capture ${new Date().toLocaleString()}`;
+
+    const { error: uploadError } = await supabase.storage
+      .from("project-sources")
+      .upload(storagePath, blob, {
+        contentType: blob.type || "video/webm",
+        upsert: false,
+      });
+
+    if (uploadError) throw uploadError;
+
+    await sourceMutation.mutateAsync({
+      bytes: blob.size,
+      kind: sourceKind,
+      mime: blob.type || "video/webm",
+      storagePath,
+      title,
+    });
+  }
+
+  async function startCapture(kind: CaptureKind) {
+    setCaptureError(null);
+    if (!navigator.mediaDevices || typeof MediaRecorder === "undefined") {
+      setCaptureError("This browser does not support recording. Try Chrome or Edge.");
+      return;
+    }
+
+    try {
+      const stream =
+        kind === "voice"
+          ? await navigator.mediaDevices.getUserMedia({ audio: true })
+          : await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+
+      chunksRef.current = [];
+      streamRef.current = stream;
+      const recorder = new MediaRecorder(stream);
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "video/webm" });
+        stream.getTracks().forEach((track) => track.stop());
+        streamRef.current = null;
+        recorderRef.current = null;
+        setCapture(null);
+        void saveCapture(kind, blob)
+          .then(() => toast.success("Capture saved as a project source"))
+          .catch((error) => {
+            setCaptureError(error instanceof Error ? error.message : "Could not save capture.");
+            toast.error("Could not save capture");
+          });
+      };
+      recorder.start();
+      setCapture({
+        kind,
+        label:
+          kind === "voice"
+            ? "Voice recording"
+            : kind === "meeting"
+              ? "Meeting companion"
+              : "Screen capture",
+      });
+    } catch (error) {
+      setCaptureError(error instanceof Error ? error.message : "Capture permission was not granted.");
+    }
+  }
+
+  function stopCapture() {
+    recorderRef.current?.stop();
+    streamRef.current?.getTracks().forEach((track) => track.stop());
+  }
+
+  async function saveMeetingNote() {
+    if (!meetingNotes.trim()) return;
+    await sourceMutation.mutateAsync({
+      kind: "note",
+      content: meetingNotes,
+      title: `Meeting companion notes ${new Date().toLocaleString()}`,
+      mime: "text/plain",
+      bytes: meetingNotes.length,
+    });
+    setMeetingNotes("");
+    toast.success("Meeting notes saved as project context");
+  }
+
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <Card className="p-4">
-        <div className="text-sm font-semibold">Add sources</div>
+        <div className="text-sm font-semibold">Capture context</div>
         <p className="mt-1 text-xs text-muted-foreground">
-          Drop files, paste transcripts, upload meeting recordings, or add quick notes.
+          Record voice, capture your screen, or run a lightweight meeting companion.
         </p>
-        <div className="mt-3 rounded-md border-2 border-dashed p-6 text-center text-xs text-muted-foreground">
-          <Upload className="mx-auto h-5 w-5" />
-          <div className="mt-2">Drop files here or click to browse</div>
-          <div className="text-[10px]">PDF, DOCX, TXT, MD, VTT, MP3, MP4 up to 500 MB</div>
+        <div className="mt-3 rounded-md border bg-muted/30 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div className="text-xs font-medium">
+                {capture ? `${capture.label} running` : "Meeting companion ready"}
+              </div>
+              <div className="mt-0.5 text-[11px] text-muted-foreground">
+                {capture
+                  ? "Stop when the meeting or capture is complete. ExecOS saves it as source context."
+                  : "Start with screen, meeting, or voice capture."}
+              </div>
+            </div>
+            {capture && <Radio className="h-4 w-4 animate-pulse text-red-600" />}
+          </div>
+          {captureError && (
+            <div className="mt-2 rounded border border-destructive/30 bg-destructive/5 p-2 text-[11px] text-destructive">
+              {captureError}
+            </div>
+          )}
+          <div className="mt-3 grid gap-2">
+            {capture ? (
+              <Button size="sm" variant="destructive" onClick={stopCapture}>
+                <Square className="h-3.5 w-3.5" /> Stop and save
+              </Button>
+            ) : (
+              <>
+                <Button size="sm" variant="outline" onClick={() => startCapture("meeting")}>
+                  <Video className="h-3.5 w-3.5" /> Start meeting companion
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => startCapture("screen")}>
+                  <MonitorUp className="h-3.5 w-3.5" /> Capture screen/video
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => startCapture("voice")}>
+                  <Mic className="h-3.5 w-3.5" /> Record voice note
+                </Button>
+              </>
+            )}
+          </div>
         </div>
         <div className="mt-3 space-y-2">
+          <textarea
+            value={meetingNotes}
+            onChange={(e) => setMeetingNotes(e.target.value)}
+            placeholder="Add live meeting notes, transcript snippets, or context..."
+            className="min-h-24 w-full resize-none rounded-md border bg-background px-3 py-2 text-xs outline-none focus:ring-2 focus:ring-ring"
+          />
           <Button variant="outline" size="sm" className="w-full justify-start">
             <FileType className="h-3.5 w-3.5" /> Paste transcript
           </Button>
-          <Button variant="outline" size="sm" className="w-full justify-start">
-            <Mic className="h-3.5 w-3.5" /> Record meeting
-          </Button>
-          <Button variant="outline" size="sm" className="w-full justify-start">
-            <StickyNote className="h-3.5 w-3.5" /> Add quick note
+          <Button
+            disabled={!meetingNotes.trim() || sourceMutation.isPending}
+            onClick={saveMeetingNote}
+            variant="outline"
+            size="sm"
+            className="w-full justify-start"
+          >
+            <StickyNote className="h-3.5 w-3.5" /> Save meeting note
           </Button>
         </div>
       </Card>
@@ -438,7 +615,216 @@ function ActionsTab({ actions, projectId }: { actions: any[]; projectId: string 
   );
 }
 
-function ArtifactsTab({ artifacts }: any) {
+function buildArtifactDraft(kind: string, project: any, memory: any[], actions: any[]) {
+  const decisions = memory.filter((item) => item.type === "decision");
+  const risks = memory.filter((item) => item.type === "risk");
+  const questions = memory.filter((item) => item.type === "question");
+  const openActions = actions.filter((item) => item.status !== "done");
+  const list = (items: any[], fallback: string) =>
+    items.length
+      ? items.slice(0, 5).map((item) => `- ${item.title}`).join("\n")
+      : `- ${fallback}`;
+
+  const common = `Project: ${project.name}
+Status: ${project.health}
+Summary: ${project.summary ?? "No summary captured yet."}`;
+
+  const drafts: Record<string, { body: string; title: string }> = {
+    exec_brief: {
+      title: `${project.name} executive brief`,
+      body: `${common}
+
+Key decisions
+${list(decisions, "No decisions captured yet.")}
+
+Top risks
+${list(risks, "No risks flagged yet.")}
+
+Open actions
+${list(openActions, "No open actions.")}
+
+Executive ask
+- Confirm the next decision owner and the highest-risk dependency before the next sync.`,
+    },
+    meeting_summary: {
+      title: `${project.name} meeting summary`,
+      body: `${common}
+
+Decisions
+${list(decisions, "No decisions captured in this context.")}
+
+Actions
+${list(openActions, "No action items captured.")}
+
+Open questions
+${list(questions, "No open questions captured.")}
+
+Suggested follow-up
+- Send owners a recap with decisions, due dates, and unresolved questions.`,
+    },
+    project_plan: {
+      title: `${project.name} project plan`,
+      body: `${common}
+
+Workstreams
+- Discovery and source ingestion
+- Decision and risk tracking
+- Stakeholder follow-up
+- Executive reporting
+
+Milestones
+- Validate scope
+- Confirm owners
+- Resolve top risks
+- Publish executive update
+
+Dependencies
+${list(risks, "No dependencies identified yet.")}`,
+    },
+    prd: {
+      title: `${project.name} PRD`,
+      body: `${common}
+
+Problem
+- The team needs a reliable system of record for decisions, context, and execution.
+
+Goals
+- Preserve project memory
+- Reduce missed follow-ups
+- Generate reusable work products
+
+Requirements
+- Capture source context
+- Extract memory items
+- Generate artifacts
+- Track action ownership
+
+Acceptance criteria
+- Users can retrieve prior decisions and generate a brief from current context.`,
+    },
+    sop: {
+      title: `${project.name} SOP`,
+      body: `${common}
+
+Procedure
+1. Create or select the project workspace.
+2. Add meeting, file, transcript, voice, or screen context.
+3. Review extracted decisions, risks, actions, and questions.
+4. Assign owners and confirm due dates.
+5. Generate the appropriate artifact.
+6. Send follow-up and review before the next meeting.`,
+    },
+    swot: {
+      title: `${project.name} SWOT`,
+      body: `${common}
+
+Strengths
+- Existing project context is centralized.
+- Decisions and actions are visible.
+
+Weaknesses
+${list(questions, "Unclear open questions still need triage.")}
+
+Opportunities
+- Turn recurring meetings into reusable executive memory.
+- Improve stakeholder alignment and follow-through.
+
+Threats
+${list(risks, "No threats captured yet.")}`,
+    },
+    sprint_plan: {
+      title: `${project.name} sprint plan`,
+      body: `${common}
+
+Sprint goal
+- Resolve the highest-priority risks and convert project memory into executable follow-up.
+
+Backlog candidates
+${list(openActions, "No backlog candidates captured yet.")}
+
+Ceremonies
+- Planning: confirm scope and owners
+- Mid-sprint check: review risks and blockers
+- Review: publish executive brief
+- Retro: capture lessons learned`,
+    },
+    followup_email: {
+      title: `${project.name} follow-up email`,
+      body: `Subject: Follow-up on ${project.name}
+
+Hi team,
+
+Sharing a quick recap from the latest project context.
+
+Decisions:
+${list(decisions, "No decisions captured yet.")}
+
+Open actions:
+${list(openActions, "No open actions.")}
+
+Risks:
+${list(risks, "No risks flagged.")}
+
+Please confirm owners and any changes before the next sync.`,
+    },
+    meeting_prep: {
+      title: `${project.name} meeting prep`,
+      body: `${common}
+
+Before the meeting
+- Review open decisions and overdue actions.
+- Confirm which risks need executive attention.
+
+Talking points
+${list(decisions, "Confirm the main decision to make.")}
+
+Questions to ask
+${list(questions, "What changed since the last meeting?")}
+
+Recommended close
+- Confirm owners, due dates, and the next review point.`,
+    },
+  };
+
+  return drafts[kind] ?? drafts.exec_brief;
+}
+
+function ArtifactsTab({
+  actions,
+  artifacts,
+  memory,
+  project,
+  projectId,
+}: {
+  actions: any[];
+  artifacts: any[];
+  memory: any[];
+  project: any;
+  projectId: string;
+}) {
+  const qc = useQueryClient();
+  const create = useServerFn(createArtifact);
+  const mutation = useMutation({
+    mutationFn: (kind: string) => {
+      const draft = buildArtifactDraft(kind, project, memory, actions);
+      return create({
+        data: {
+          projectId,
+          kind: kind as any,
+          title: draft.title,
+          body: draft.body,
+        },
+      });
+    },
+    onSuccess: () => {
+      toast.success("Artifact generated");
+      qc.invalidateQueries({ queryKey: ["project", projectId] });
+    },
+    onError: (error) => {
+      toast.error(error instanceof Error ? error.message : "Could not generate artifact");
+    },
+  });
+
   return (
     <div className="grid gap-4 lg:grid-cols-3">
       <Card className="p-4 lg:col-span-1">
@@ -450,11 +836,17 @@ function ArtifactsTab({ artifacts }: any) {
           {ARTIFACT_TYPES.map((t) => (
             <button
               key={t.key}
+              disabled={mutation.isPending}
+              onClick={() => mutation.mutate(t.key)}
               className="w-full rounded-md border bg-background p-2.5 text-left text-xs hover:bg-muted"
             >
               <div className="flex items-center justify-between">
                 <span className="font-medium">{t.label}</span>
-                <Sparkles className="h-3 w-3 text-muted-foreground" />
+                {mutation.isPending ? (
+                  <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />
+                ) : (
+                  <Wand2 className="h-3 w-3 text-muted-foreground" />
+                )}
               </div>
               <div className="mt-0.5 text-[11px] text-muted-foreground">{t.desc}</div>
             </button>
