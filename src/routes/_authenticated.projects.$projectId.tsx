@@ -25,8 +25,10 @@ import {
   Square,
   Radio,
   Wand2,
+  Pause,
+  Play,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AppShell } from "@/components/app-shell";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -264,6 +266,69 @@ function OverviewTab({ project, memory, actions }: any) {
 
 type CaptureKind = "screen" | "voice" | "meeting";
 
+function formatElapsed(seconds: number) {
+  const minutes = Math.floor(seconds / 60);
+  const rest = seconds % 60;
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+function CaptureFloatingControl({
+  elapsedSeconds,
+  isPaused,
+  label,
+  onPause,
+  onResume,
+  onStop,
+}: {
+  elapsedSeconds: number;
+  isPaused: boolean;
+  label: string;
+  onPause: () => void;
+  onResume: () => void;
+  onStop: () => void;
+}) {
+  return (
+    <div className="fixed bottom-5 right-5 z-50 w-[min(22rem,calc(100vw-2rem))] rounded-lg border bg-background shadow-2xl">
+      <div className="flex items-center gap-3 border-b px-3 py-2">
+        <div
+          className={cn(
+            "grid h-8 w-8 place-items-center rounded-full",
+            isPaused ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-700",
+          )}
+        >
+          {isPaused ? <Pause className="h-4 w-4" /> : <Radio className="h-4 w-4 animate-pulse" />}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-sm font-semibold">ExecOS is running</div>
+          <div className="truncate text-[11px] text-muted-foreground">
+            {label} · {isPaused ? "Paused" : "Capturing in background"}
+          </div>
+        </div>
+        <div className="rounded border bg-muted px-2 py-1 font-mono text-xs">
+          {formatElapsed(elapsedSeconds)}
+        </div>
+      </div>
+      <div className="flex items-center gap-2 p-3">
+        {isPaused ? (
+          <Button size="sm" className="flex-1" onClick={onResume}>
+            <Play className="h-3.5 w-3.5" /> Resume
+          </Button>
+        ) : (
+          <Button size="sm" className="flex-1" variant="outline" onClick={onPause}>
+            <Pause className="h-3.5 w-3.5" /> Pause
+          </Button>
+        )}
+        <Button size="sm" className="flex-1" variant="destructive" onClick={onStop}>
+          <Square className="h-3.5 w-3.5" /> Stop and save
+        </Button>
+      </div>
+      <div className="border-t px-3 py-2 text-[11px] text-muted-foreground">
+        Visible capture indicator for transparency. Stop to save the recording as project context.
+      </div>
+    </div>
+  );
+}
+
 function SourcesTab({ sources, projectId }: { sources: any[]; projectId: string }) {
   const qc = useQueryClient();
   const addSource = useServerFn(createSource);
@@ -272,7 +337,15 @@ function SourcesTab({ sources, projectId }: { sources: any[]; projectId: string 
   const recorderRef = useRef<MediaRecorder | null>(null);
   const [capture, setCapture] = useState<{ kind: CaptureKind; label: string } | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  const [capturePaused, setCapturePaused] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [meetingNotes, setMeetingNotes] = useState("");
+
+  useEffect(() => {
+    if (!capture || capturePaused) return;
+    const id = window.setInterval(() => setElapsedSeconds((seconds) => seconds + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [capture, capturePaused]);
 
   const sourceMutation = useMutation({
     mutationFn: (vars: {
@@ -341,6 +414,8 @@ function SourcesTab({ sources, projectId }: { sources: any[]; projectId: string 
         streamRef.current = null;
         recorderRef.current = null;
         setCapture(null);
+        setCapturePaused(false);
+        setElapsedSeconds(0);
         void saveCapture(kind, blob)
           .then(() => toast.success("Capture saved as a project source"))
           .catch((error) => {
@@ -358,8 +433,24 @@ function SourcesTab({ sources, projectId }: { sources: any[]; projectId: string 
               ? "Meeting companion"
               : "Screen capture",
       });
+      setCapturePaused(false);
+      setElapsedSeconds(0);
     } catch (error) {
       setCaptureError(error instanceof Error ? error.message : "Capture permission was not granted.");
+    }
+  }
+
+  function pauseCapture() {
+    if (recorderRef.current?.state === "recording") {
+      recorderRef.current.pause();
+      setCapturePaused(true);
+    }
+  }
+
+  function resumeCapture() {
+    if (recorderRef.current?.state === "paused") {
+      recorderRef.current.resume();
+      setCapturePaused(false);
     }
   }
 
@@ -383,6 +474,16 @@ function SourcesTab({ sources, projectId }: { sources: any[]; projectId: string 
 
   return (
     <div className="grid gap-4 lg:grid-cols-3">
+      {capture && (
+        <CaptureFloatingControl
+          elapsedSeconds={elapsedSeconds}
+          isPaused={capturePaused}
+          label={capture.label}
+          onPause={pauseCapture}
+          onResume={resumeCapture}
+          onStop={stopCapture}
+        />
+      )}
       <Card className="p-4">
         <div className="text-sm font-semibold">Capture context</div>
         <p className="mt-1 text-xs text-muted-foreground">
