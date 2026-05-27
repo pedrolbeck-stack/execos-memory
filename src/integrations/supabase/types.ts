@@ -576,8 +576,6 @@ export type Database = {
         | "project_plan"
         | "followup_email"
         | "meeting_prep"
-        | "swot"
-        | "sprint_plan"
       chat_role: "user" | "assistant" | "system"
       memory_type:
         | "decision"
@@ -729,8 +727,6 @@ export const Constants = {
         "project_plan",
         "followup_email",
         "meeting_prep",
-        "swot",
-        "sprint_plan",
       ],
       chat_role: ["user", "assistant", "system"],
       memory_type: [

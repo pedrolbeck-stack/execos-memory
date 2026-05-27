@@ -14,6 +14,18 @@ export const artifactKindSchema = z.enum([
   "sprint_plan",
 ]);
 
+const dbArtifactKind: Record<z.infer<typeof artifactKindSchema>, string> = {
+  exec_brief: "exec_brief",
+  meeting_summary: "meeting_summary",
+  prd: "prd",
+  sop: "sop",
+  project_plan: "project_plan",
+  followup_email: "followup_email",
+  meeting_prep: "meeting_prep",
+  swot: "exec_brief",
+  sprint_plan: "project_plan",
+};
+
 export const createArtifact = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) =>
@@ -36,7 +48,7 @@ export const createArtifact = createServerFn({ method: "POST" })
       .from("artifacts")
       .insert({
         project_id: data.projectId,
-        kind: data.kind as any,
+        kind: dbArtifactKind[data.kind] as any,
         title: data.title,
         body: data.body,
         created_by: userId,
